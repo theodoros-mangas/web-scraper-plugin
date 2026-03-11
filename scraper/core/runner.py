@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from scraper.core.fetcher import Fetcher
 from scraper.core.limiter import RateLimiter
@@ -16,6 +16,7 @@ class RunStats:
     pages_fetched: int = 0
     items_saved: int = 0
     errors: int = 0
+    failed_urls: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -30,34 +31,38 @@ class Runner:
         queue = deque(plugin.start_urls())
         seen: set[str] = set(queue)
 
-        while queue and stats.pages_fetched < self.max_pages:
-            url = queue.popleft()
-            ctx = ParseContext(url=url)
+        try:
+            while queue and stats.pages_fetched < self.max_pages:
+                url = queue.popleft()
+                ctx = ParseContext(url=url)
 
-            try:
-                self.limiter.wait()
-                res = self.fetcher.fetch(url)
-                stats.pages_fetched += 1
+                try:
+                    self.limiter.wait()
+                    res = self.fetcher.fetch(url)
+                    stats.pages_fetched += 1
 
-                items = plugin.parse(ctx, res.text)
-                cleaned = []
-                for it in items:
-                    it = normalize_item(it)
-                    it = validate_item(it)
-                    cleaned.append(it)
+                    cleaned = self._clean_items(plugin.parse(ctx, res.text))
+                    if cleaned:
+                        self.store.write_many(cleaned)
+                        stats.items_saved += len(cleaned)
 
-                if cleaned:
-                    self.store.write_many(cleaned)
-                    stats.items_saved += len(cleaned)
+                    for next_url in plugin.next_urls(ctx, res.text):
+                        if next_url and next_url not in seen:
+                            seen.add(next_url)
+                            queue.append(next_url)
 
-                for nxt in plugin.next_urls(ctx, res.text):
-                    if nxt not in seen:
-                        seen.add(nxt)
-                        queue.append(nxt)
+                except Exception:
+                    stats.errors += 1
+                    stats.failed_urls.append(url)
+        finally:
+            self.store.close()
 
-            except Exception:
-                stats.errors += 1
-                continue
-
-        self.store.close()
         return stats
+
+    @staticmethod
+    def _clean_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
+        cleaned: list[dict[str, object]] = []
+        for item in items:
+            normalized = normalize_item(item)
+            cleaned.append(validate_item(normalized))
+        return cleaned

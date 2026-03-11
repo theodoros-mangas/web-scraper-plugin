@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Iterable
+from urllib.parse import urljoin
+
 from selectolax.parser import HTMLParser
 
 from scraper.core.types import Item
@@ -36,13 +39,10 @@ class QuotesToScrapePlugin(ScraperPlugin):
 
         return items
 
-    def next_urls(self, ctx: ParseContext, html: str):
+    def next_urls(self, ctx: ParseContext, html: str) -> Iterable[str]:
         tree = HTMLParser(html)
         next_a = tree.css_first("li.next a")
         if next_a:
             href = next_a.attributes.get("href")
-            # site uses relative links
-            if href and href.startswith("http"):
-                yield href
-            elif href:
-                yield "https://quotes.toscrape.com" + href
+            if href:
+                yield urljoin(ctx.url, href)

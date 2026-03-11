@@ -1,195 +1,144 @@
-# web-scraper-plugin
-A scraper framework where each site is a plugin
 # plugin-web-scraper
 
-A small but production-style scraping framework demonstrating clean architecture, extensibility, and testability in Python.
+A small Python project that treats scraping as a maintainable system instead of a disposable script.
 
-> This project is intentionally designed as an engineering showcase rather than a one-off script.
+The codebase is intentionally compact, but the boundaries are real: fetching, retry policy, rate limiting, parsing, validation, storage, and CLI execution are all isolated and testable. That makes it useful both as a learning project and as a portfolio example.
 
-Instead of writing a new scraper for every website, the framework separates responsibilities:
+## What it demonstrates
 
-* HTTP fetching & retry logic
-* rate limiting
-* parsing (site-specific plugins)
-* data validation & normalization
-* storage backend (JSONL or SQLite)
-* CLI interface
-* unit-testable core
+- A plugin registry for site-specific scraping logic
+- A reusable runner that orchestrates fetch, parse, validate, and persist steps
+- A deterministic test suite that does not need live network access
+- A CLI that is simple to use and easy to extend
+- A deliberately sync-first design that favors clarity over premature complexity
 
-The result: adding a new website requires only a single class.
+## Project layout
 
----
-
-## Architecture
-
+```text
+scraper/
+├── cli.py              # Typer entrypoint
+├── config.py           # Runtime configuration and validation
+├── core/
+│   ├── fetcher.py      # HTTP fetching + retry integration
+│   ├── limiter.py      # Global rate limiting
+│   ├── retry.py        # Exponential backoff policy
+│   ├── runner.py       # Main orchestration loop
+│   └── types.py        # Shared runtime types
+├── pipeline/
+│   ├── transforms.py   # Normalization
+│   └── validators.py   # Schema-ish validation
+├── plugins/
+│   ├── base.py         # Plugin contract
+│   ├── quotes.py       # Example scraper plugin
+│   └── registry.py     # Explicit plugin registration
+└── storage/
+    ├── base.py         # Storage interface
+    └── jsonl.py        # JSONL implementation
 ```
-                ┌──────────────┐
-                │   Runner     │
-                └──────┬───────┘
-                       │
-        ┌──────────────┼──────────────┐
-        │              │              │
-   Fetcher        RateLimiter      Store
-        │                              │
-        │                              │
-        ▼                              ▼
-              Scraper Plugin (per-site)
-                     │
-                     ▼
-           Pipeline (validate + normalize)
-```
 
-### Design goals
-
-* SOLID-style separation of concerns
-* deterministic tests (no network dependency)
-* reusable components
-* minimal dependencies
-* CLI-friendly UX
-
----
-
-## Quickstart
-
-Clone and run in under a minute:
+## Quick start
 
 ```bash
-git clone <repo-url>
-cd plugin-web-scraper
+git clone https://github.com/theodoros-mangas/web-scraper-plugin.git
+cd web-scraper-plugin
 
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
 
 pip install -e ".[dev]"
 ```
 
-List available plugins:
+List the available plugins:
 
 ```bash
 scrape list
 ```
 
-Run the demo scraper:
+Run the demo scraper against quotes.toscrape.com:
 
 ```bash
-scrape run quotes --max-pages 2
+scrape run quotes --max-pages 2 --out out/items.jsonl
 ```
 
-Output will appear in:
+The command prints a short run summary and appends normalized records to out/items.jsonl.
 
-```
-out/items.jsonl
-```
+## How a plugin fits in
 
----
+Each plugin owns only site-specific behavior:
 
-## SQLite Storage
+- where to start
+- how to parse a page
+- how to discover the next page
 
-You can also store structured results in a database:
-
-```bash
-scrape run quotes --store sqlite --out out/quotes.db
-```
-
-Quick check:
+Everything else stays in the framework.
 
 ```python
-import sqlite3
-conn = sqlite3.connect("out/quotes.db")
-print(conn.execute("SELECT COUNT(*) FROM items").fetchone())
-```
-
----
-
-## Writing a New Plugin
-
-Create one class only.
-
-```python
-from scraper.plugins.base import ScraperPlugin, ParseContext
 from selectolax.parser import HTMLParser
 
-class MySite(ScraperPlugin):
+from scraper.core.types import Item
+from scraper.plugins.base import ParseContext, ScraperPlugin
+
+
+class MySitePlugin(ScraperPlugin):
     name = "mysite"
 
-    def start_urls(self):
+    def start_urls(self) -> list[str]:
         return ["https://example.com"]
 
-    def parse(self, ctx: ParseContext, html: str):
+    def parse(self, ctx: ParseContext, html: str) -> list[Item]:
         tree = HTMLParser(html)
-        return [{
-            "source": self.name,
-            "url": ctx.url,
-            "title": tree.css_first("h1").text(strip=True)
-        }]
+        heading = tree.css_first("h1")
+        if not heading:
+            return []
+
+        return [
+            {
+                "source": self.name,
+                "url": ctx.url,
+                "title": heading.text(strip=True),
+            }
+        ]
 ```
 
-Register it in:
+Register the class in scraper/plugins/__init__.py and it becomes available through the CLI.
 
-```
-scraper/plugins/__init__.py
-```
+## Design choices
 
-Run:
-
-```
-scrape run mysite
-```
-
-No other code changes required.
-
----
+| Decision | Why it exists |
+| --- | --- |
+| Sync-first execution | Easier to reason about, easier to test, enough for a showcase-sized framework |
+| Explicit plugin registry | No hidden imports or auto-discovery magic |
+| JSONL output | Simple, diffable, and easy to inspect locally |
+| Validation after parsing | Keeps plugin code focused on extraction |
+| Small public surface area | Lower maintenance cost and cleaner extension points |
 
 ## Testing
 
-All core logic is testable without internet access.
+The tests cover the parts recruiters usually look for when they open a small Python repo:
 
-```
-pytest -q
-```
+- registry behavior and failure cases
+- retry timing behavior
+- runner orchestration, cleanup, and error handling
 
-Tests cover:
+Run them with:
 
-* plugin registry
-* retry policy
-* runner orchestration
-* storage backends
-
----
-
-## Why this project exists
-
-Many scraping examples online are tightly coupled scripts:
-
-```
-requests → parse → print → done
+```bash
+pytest
 ```
 
-Real systems need:
+## Current limitations
 
-* retries
-* rate limiting
-* storage abstraction
-* extensibility
-* deterministic tests
+This is still a small framework, not a full crawler. A few obvious next steps would be:
 
-This repository demonstrates how to structure such a system cleanly in Python.
+- richer item schemas per plugin
+- structured logging
+- multiple storage backends
+- async fetching for high-throughput workloads
 
----
-
-## Tradeoffs
-
-| Decision         | Reason                     |
-| ---------------- | -------------------------- |
-| Sync first       | easier testing & reasoning |
-| JSONL default    | reproducible outputs       |
-| SQLite optional  | structured querying        |
-| selectolax       | fast & lightweight parser  |
-| explicit plugins | avoids implicit magic      |
-
-Async support could be added without changing plugin interfaces.
-
----
+Those are intentionally left out so the current design stays readable.
 
 ## License
 

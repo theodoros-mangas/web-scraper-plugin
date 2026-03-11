@@ -4,8 +4,8 @@ from scraper.core.types import Item
 
 
 def normalize_item(item: Item) -> Item:
-    # Example: trim strings
-    for k, v in list(item.items()):
+    normalized = dict(item)
+    for k, v in list(normalized.items()):
         if isinstance(v, str):
-            item[k] = v.strip()
-    return item
+            normalized[k] = v.strip()
+    return normalized

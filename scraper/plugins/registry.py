@@ -19,6 +19,8 @@ class PluginRegistry:
         name = getattr(plugin_cls, "name", None)
         if not name or not isinstance(name, str):
             raise ValueError("Plugin class must define a string 'name' attribute.")
+        if name in self._plugins:
+            raise ValueError(f"Plugin '{name}' is already registered.")
         self._plugins[name] = plugin_cls
 
     def create(self, name: str) -> ScraperPlugin:
